@@ -108,6 +108,15 @@ func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
 func (s *Scheduler) finishJob(jobID string, attempts int, result EngineResult, runErr error) error {
 	return s.store.Update(func(st *persistence.State) error {
 		job := st.SolveJobs[jobID]
+		// The job may have been finalized (e.g. canceled) by a concurrent
+		// Cancel/Recover call while the engine was computing and no lock was
+		// held. A finishing execution request must neither override that
+		// terminal state nor surface it as an illegal-state conflict: the
+		// cancel already recorded its own event, so leave the job settled in
+		// its final state and return cleanly.
+		if domain.IsTerminalJob(job.Status) {
+			return nil
+		}
 		job.Attempts = attempts
 		if runErr != nil {
 			status, class := classifyRunError(runErr)
