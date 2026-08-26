@@ -78,6 +78,11 @@ func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
 		}
 		current.Status = domain.JobRunning
 		current.Attempts++
+		// Execution timeout must be measured from when the job actually starts
+		// running, not from when it was queued. A queued job may be reused
+		// (idempotently) and started much later via run_now, so recomputing the
+		// deadline here prevents long-queued tasks from timing out instantly.
+		current.Deadline = domain.NowUTC().Add(s.jobTimeout)
 		ev := persistence.AppendEvent(st, persistence.EventSolveRunning, current.ID, current.InputSnapshotHash, "")
 		current.UpdatedAt = ev.RecordedAt
 		st.SolveJobs[current.ID] = current
