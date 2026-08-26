@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"leo-debris-orbit-loop/internal/domain"
@@ -188,7 +187,12 @@ func (a *App) createSolveJob(w http.ResponseWriter, r *http.Request, targetID st
 		return
 	}
 	if req.RunNow {
-		if err := a.Scheduler.RunJob(context.Background(), job.ID); err != nil {
+		// Bind the synchronous solve to the client's request context so that a
+		// client timeout or disconnect cancels the in-flight computation
+		// promptly. The scheduler classifies context.Canceled as a canceled
+		// terminal state and persists it, keeping status and failure class
+		// queryable via GET /v1/solve-jobs/{job_id}.
+		if err := a.Scheduler.RunJob(r.Context(), job.ID); err != nil {
 			writeError(w, err)
 			return
 		}
