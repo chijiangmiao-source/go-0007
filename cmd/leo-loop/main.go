@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -60,7 +61,17 @@ func serve(app *api.App, addr string, shutdownTimeout time.Duration) error {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case sig := <-stop:
-		_ = srv.Close()
+		// Graceful shutdown: stop accepting new connections and give in-flight
+		// requests (e.g. a run_now solve that is mid-compute and must commit its
+		// terminal job state and HTTP response) up to the configured timeout to
+		// finish. Using Shutdown instead of Close keeps the persistence
+		// transactions intact so recovery does not mark still-running jobs as
+		// canceled merely because the process was asked to stop.
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "graceful shutdown failed: %v\n", err)
+		}
 		fmt.Fprintf(os.Stderr, "stopped on %s\n", sig)
 		return nil
 	case err := <-errs:
