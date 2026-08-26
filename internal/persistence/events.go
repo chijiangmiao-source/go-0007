@@ -3,7 +3,22 @@ package persistence
 import (
 	"fmt"
 	"leo-debris-orbit-loop/internal/domain"
+	"time"
 )
+
+// eventChecksumFields is the canonical tuple authenticated by each event's
+// checksum. RecordedAt is included so that tampering with the persisted
+// timestamp is detected as a checksum mismatch during recovery. The timestamp
+// is rendered with RFC3339Nano because that is the form JSON round-trips
+// through, keeping the checksum stable across persist/reload and independent
+// of any monotonic clock reading.
+const eventChecksumFormat = "%d|%s|%s|%s|%s|%s|%s"
+
+func eventChecksum(ev domain.EventRecord, prev string) string {
+	return domain.HashBytes([]byte(fmt.Sprintf(eventChecksumFormat,
+		ev.Seq, ev.Type, ev.AggregateID, ev.PayloadHash, ev.CausationID,
+		ev.RecordedAt.UTC().Format(time.RFC3339Nano), prev)))
+}
 
 const (
 	EventObservationReceived = "observation.received"
@@ -28,7 +43,7 @@ func AppendEvent(st *State, typ, aggregate, payloadHash, causation string) domai
 		Seq: seq, Type: typ, AggregateID: aggregate, PayloadHash: payloadHash,
 		CausationID: causation, RecordedAt: domain.NowUTC(),
 	}
-	ev.Checksum = domain.HashBytes([]byte(fmt.Sprintf("%d|%s|%s|%s|%s|%s", ev.Seq, ev.Type, ev.AggregateID, ev.PayloadHash, ev.CausationID, prev)))
+	ev.Checksum = eventChecksum(ev, prev)
 	st.Events = append(st.Events, ev)
 	st.NextEvent++
 	return ev
@@ -41,7 +56,7 @@ func ValidateEventChain(events []domain.EventRecord) error {
 		if ev.Seq != expectedSeq {
 			return domain.Errorf(domain.CodeCorruptStore, "event sequence gap at %d", expectedSeq)
 		}
-		sum := domain.HashBytes([]byte(fmt.Sprintf("%d|%s|%s|%s|%s|%s", ev.Seq, ev.Type, ev.AggregateID, ev.PayloadHash, ev.CausationID, prev)))
+		sum := eventChecksum(ev, prev)
 		if ev.Checksum != sum {
 			return domain.Errorf(domain.CodeCorruptStore, "event checksum mismatch at seq %d", ev.Seq)
 		}
