@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+set -eu
+
+workdir="$(pwd)"
+if [ "${1:-}" = "--prefix" ]; then
+  workdir="$2"
+  shift 2
+fi
+
+case "${1:-}" in
+  install|ci)
+    exit 0
+    ;;
+  run)
+    if [ "${2:-}" != "build" ]; then
+      echo "local npm shim supports install, ci, and run build" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "local npm shim supports install, ci, and run build" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$workdir/src/index.html" ]; then
+  echo "frontend source not found in $workdir/src" >&2
+  exit 1
+fi
+mkdir -p "$workdir/dist"
+cp "$workdir/src/index.html" "$workdir/dist/index.html"
+cp "$workdir/src/app.js" "$workdir/dist/app.js"
+cp "$workdir/src/styles.css" "$workdir/dist/styles.css"
