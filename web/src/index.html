@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>空间碎片观测闭环</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="toolbar">
+        <div>
+          <h1>空间碎片观测闭环</h1>
+          <p id="checkpoint">读取后端状态中...</p>
+        </div>
+        <button id="refresh" type="button">刷新</button>
+      </section>
+      <section class="metrics" aria-live="polite">
+        <article><span>测站</span><strong id="stations">0</strong></article>
+        <article><span>弧段</span><strong id="arcs">0</strong></article>
+        <article><span>目标</span><strong id="targets">0</strong></article>
+        <article><span>解算</span><strong id="solutions">0</strong></article>
+        <article><span>冻结版本</span><strong id="versions">0</strong></article>
+      </section>
+      <section class="panel">
+        <h2>事件日志</h2>
+        <ol id="events"></ol>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
