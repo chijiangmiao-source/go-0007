@@ -102,10 +102,10 @@ func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
 		time.Sleep(time.Duration(job.Attempts) * 10 * time.Millisecond)
 		job.Attempts++
 	}
-	return s.finishJob(jobID, job.Attempts, result, runErr)
+	return s.finishJob(jobID, job.Attempts, result, runErr, snapshot)
 }
 
-func (s *Scheduler) finishJob(jobID string, attempts int, result EngineResult, runErr error) error {
+func (s *Scheduler) finishJob(jobID string, attempts int, result EngineResult, runErr error, snapshot InputSnapshot) error {
 	return s.store.Update(func(st *persistence.State) error {
 		job := st.SolveJobs[jobID]
 		if domain.IsTerminalJob(job.Status) {
@@ -128,10 +128,15 @@ func (s *Scheduler) finishJob(jobID string, attempts int, result EngineResult, r
 			st.SolveJobs[job.ID] = job
 			return nil
 		}
-		solution := domain.OrbitSolution{ID: persistence.NextSolutionID(st), JobID: job.ID, TargetID: job.TargetID, Epoch: result.Epoch, Parameters: result.Params, Iteration: result.Iteration, OutputHash: result.OutputHash, GeneratedAt: domain.NowUTC(), Residuals: append([]domain.ResidualPoint(nil), result.Residuals...)}
-		for _, arc := range snapshotArcsForSolution(st, job.TargetID) {
-			solution.ObservationArcIDs = append(solution.ObservationArcIDs, arc.ID)
+		// Observation arc IDs must reflect the input snapshot that actually
+		// produced the residuals, parameters and output hash. Re-reading the
+		// live association state here would list arcs associated after the
+		// job started, diverging from the fixed snapshot.
+		arcIDs := make([]string, 0, len(snapshot.Arcs))
+		for _, arc := range snapshot.Arcs {
+			arcIDs = append(arcIDs, arc.ArcID)
 		}
+		solution := domain.OrbitSolution{ID: persistence.NextSolutionID(st), JobID: job.ID, TargetID: job.TargetID, Epoch: result.Epoch, Parameters: result.Params, Iteration: result.Iteration, OutputHash: result.OutputHash, GeneratedAt: domain.NowUTC(), ObservationArcIDs: arcIDs, Residuals: append([]domain.ResidualPoint(nil), result.Residuals...)}
 		job.Status = domain.JobSucceeded
 		job.ResultSolutionID = solution.ID
 		ev := persistence.AppendEvent(st, persistence.EventSolveSucceeded, job.ID, result.OutputHash, solution.ID)
@@ -159,6 +164,3 @@ func classifyRunError(err error) (domain.SolveJobStatus, string) {
 	}
 }
 
-func snapshotArcsForSolution(st *persistence.State, targetID string) []domain.ObservationArc {
-	return persistence.ArcsForTarget(st, targetID)
-}
