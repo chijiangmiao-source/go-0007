@@ -40,6 +40,15 @@ func (s *Scheduler) Cancel(jobID, reason string) (CancelResult, error) {
 		out.FinalStatus = string(job.Status)
 		return nil
 	})
+	// Only after the canceled terminal state has committed do we signal the
+	// in-flight computation to stop. This preserves the terminal-state race:
+	// if the job already reached a terminal state (e.g. succeeded), Cancel
+	// returned Applied=false above and never reaches here, so a late result
+	// cannot be overwritten; the committed cancel simply propagates to the
+	// still-running engine so it no longer occupies execution resources.
+	if err == nil && out.Applied {
+		s.cancelRunner(jobID)
+	}
 	return out, err
 }
 

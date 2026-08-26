@@ -5,6 +5,7 @@ import (
 	"errors"
 	"leo-debris-orbit-loop/internal/domain"
 	"leo-debris-orbit-loop/internal/persistence"
+	"sync"
 	"time"
 )
 
@@ -13,10 +14,40 @@ type Scheduler struct {
 	engine      Engine
 	jobTimeout  time.Duration
 	maxAttempts int
+
+	runMu   sync.Mutex
+	runners map[string]context.CancelFunc
 }
 
 func NewScheduler(store *persistence.Store, engine Engine) *Scheduler {
-	return &Scheduler{store: store, engine: engine, jobTimeout: 750 * time.Millisecond, maxAttempts: 3}
+	return &Scheduler{store: store, engine: engine, jobTimeout: 750 * time.Millisecond, maxAttempts: 3, runners: make(map[string]context.CancelFunc)}
+}
+
+// setRunner registers the cancel function for an in-flight computation so a
+// concurrent Cancel can interrupt it. Registered before the running transition
+// so a cancel that races the transition is never missed.
+func (s *Scheduler) setRunner(jobID string, cancel context.CancelFunc) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	s.runners[jobID] = cancel
+}
+
+func (s *Scheduler) clearRunner(jobID string) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	delete(s.runners, jobID)
+}
+
+// cancelRunner signals an in-flight computation to stop without waiting for the
+// deadline. It is only invoked after the cancel terminal state has committed,
+// so the terminal-state race (first committed terminal wins) is preserved.
+func (s *Scheduler) cancelRunner(jobID string) {
+	s.runMu.Lock()
+	cancel, ok := s.runners[jobID]
+	s.runMu.Unlock()
+	if ok {
+		cancel()
+	}
 }
 
 func (s *Scheduler) CreateJob(targetID string, expectedRevision int64) (domain.SolveJob, error) {
@@ -54,6 +85,10 @@ func (s *Scheduler) CreateJob(targetID string, expectedRevision int64) (domain.S
 }
 
 func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
+	runCtx, runCancel := context.WithCancel(ctx)
+	s.setRunner(jobID, runCancel)
+	defer runCancel()      // always release the derived context per context.WithCancel contract
+	defer s.clearRunner(jobID)
 	var snapshot InputSnapshot
 	var job domain.SolveJob
 	if err := s.store.Update(func(st *persistence.State) error {
@@ -62,6 +97,10 @@ func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
 			return domain.Errorf(domain.CodeNotFound, "job %s not found", jobID)
 		}
 		if current.Status != domain.JobQueued {
+			// A concurrent Cancel may have committed the canceled terminal
+			// state before this transition; treat any terminal state (incl.
+			// canceled) as "nothing to run" so a late cancel does not kick off
+			// a computation that could produce a late result.
 			if domain.IsTerminalJob(current.Status) {
 				return nil
 			}
@@ -93,7 +132,7 @@ func (s *Scheduler) RunJob(ctx context.Context, jobID string) error {
 	var result EngineResult
 	var runErr error
 	for {
-		deadlineCtx, cancel := context.WithDeadline(ctx, job.Deadline)
+		deadlineCtx, cancel := context.WithDeadline(runCtx, job.Deadline)
 		result, runErr = s.engine.Compute(deadlineCtx, snapshot)
 		cancel()
 		if runErr == nil || !domain.IsCode(runErr, domain.CodeUnavailable) || job.Attempts >= s.maxAttempts {
